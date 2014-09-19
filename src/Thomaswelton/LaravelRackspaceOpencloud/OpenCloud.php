@@ -7,56 +7,66 @@ use Alchemy\Zippy\Zippy;
 // 5 minutes
 define('RAXSDK_TIMEOUT', 300);
 
-class OpenCloud extends \OpenCloud\Rackspace{
+class OpenCloud extends \OpenCloud\Rackspace {
 
-	public $region = null;
+    public $region = null;
 
-	function __construct(){
+    function __construct(){
 
-		$this->region = Config::get('laravel-rackspace-opencloud::region');
-		$authUrl = ($this->region == 'LON') ? 'https://lon.identity.api.rackspacecloud.com/v2.0/' : 'https://identity.api.rackspacecloud.com/v2.0/';
+        $this->region = Config::get('laravel-rackspace-opencloud::region');
+        $this->cdn = Config::get('laravel-rackspace-opencloud::cdn');
+        $authUrl = $this->region == 'LON' ? 'https://lon.identity.api.rackspacecloud.com/v2.0/' : 'https://identity.api.rackspacecloud.com/v2.0/';
 
-		parent::__construct($authUrl, array(
-			'username' => Config::get('laravel-rackspace-opencloud::username'),
-			'apiKey' => Config::get('laravel-rackspace-opencloud::apiKey')
-		));
-	}
+        parent::__construct($authUrl, array(
+            'username' => Config::get('laravel-rackspace-opencloud::username'),
+            'apiKey' => Config::get('laravel-rackspace-opencloud::apiKey')
+        ));
+    }
 
-	public function getObjectStore(){
-		return $this->ObjectStore('cloudFiles', $this->region);
-	}
+    public function objectStore(){
+        return parent::objectStoreService(null, $this->region);
+    }
 
-	public function getContainer($name){
-		// create a new container
-		$container = $this->getObjectStore()->Container();
-		$container->Create(array('name' => $name ));
+    public function getContainer($name){
+        try {
+            // First check to see if the container exists
+            $container = self::objectStore()->getContainer($name);
+        } catch (Exception $e) {
+            // If container does not exist create a new container
+            $container->createContainer(array('name' => $name ));
+            // Check if we are dealing with a CDN
+            if (self::$cdn) {
+                $ttl = 60 * 60 * 24 * 365;
+                $container->PublishToCDN($ttl);
+            }
+        }
+        return $container;
+    }
 
-		// publish it to the CDN with 1 year TTL
-		$ttl = 60 * 60 * 24 * 365;
-		$container->PublishToCDN($ttl);
-
-		return $container;
-	}
-
-	public function upload($container, $file, $name = null)
-	{
-		if(is_object($file) && get_class($file) == 'Symfony\Component\HttpFoundation\File\UploadedFile'){
-			// Passed with was a file upload from a form. Used the PHP tmp name
-			// and guess an extension
-			if(is_null($name)){
-				$name = basename($file) . '.' . $file->guessExtension();
-			}
-
-			return $this->createDataObject($container, $file->getRealPath(), $name);
-
-		}else if(File::isFile($file)){
-			// Passed file was a string to the file path
-			return $this->createDataObject($container, $file, $name);
-
-		}else{
-			throw new Exception("OpenCloud::upload file not found", 1);
-		}
-	}
+    public function upload($container, $file, $name = null)
+    {
+        if (is_object($file) && get_class($file) == 'Symfony\Component\HttpFoundation\File\UploadedFile') {
+            // Determine file name
+            $fileName = is_null($name) ? basename($file) . '.' . $file->guessExtension() : $name;
+            // Open file for reading
+            $fileData = fopen($file->getRealPath(), 'r');
+        } else if (File::isFile($file)) {
+            // Determine file name
+            $fileName = is_null($name) ? basename($file) : $name;
+            // Open file for reading
+            $fileData = fopen($file, 'r');
+        } else {
+            throw new Exception("OpenCloud::upload file not found", 1);
+        }
+        // Upload object
+        try {
+            $container = self::getContainer($container);
+            $container->uploadObject($fileName, $fileData);
+            return true;
+        } catch (Exception $e) {
+            return false;
+        }
+    }
 
     // Create and archive and upload a whole directory
     // $dir - Directory to upload
@@ -90,34 +100,34 @@ class OpenCloud extends \OpenCloud\Rackspace{
         }
     }
 
-	public function createDataObject($container, $filePath, $fileName = null, $extract = null)
-	{
-		if(is_null($fileName)){
-			$fileName = basename($filePath);
-		}
+    // public function createDataObject($container, $filePath, $fileName = null, $extract = null)
+    // {
+    //     $fileName = is_null($fileName) ? basename($filePath) : $fileName;
+    //     // Get the container
+    //     $container = self::getContainer($container);
+    //     // If CDN set access control
+    //     if (self::$cdn) {
+    //         $headers = array('Access-Control-Allow-Origin' => '*');
+    //     }
 
-		$container = $this->getContainer($container);
+    //     // Create data object
+    //     $object = $container->DataObject();
+    //     $object->Create(array('name'=> $fileName, 'extra_headers' => $headers), $filePath, $extract);
 
-		$headers = array(
-			"Access-Control-Allow-Origin" => "*"
-		);
+    //     return $object;
+    // }
 
-		$object = $container->DataObject();
-		$object->Create(array('name'=> $fileName, 'extra_headers' => $headers), $filePath, $extract);
-
-		return $object;
-	}
-  
-  public function delete($container, $file){
-      $container = $this->getContainer($container);
-      //if file is fed with full url, shorten to last component
+    public function destroy($container, $file)
+    {
+        $container = self::getContainer($container);
+        // if file is fed with full url, shorten to last component
         $file = explode('/',$file);
         $file = end($file);
-      try{
-          return $container->DataObject($file)->delete();
-      }catch(\OpenCloud\Common\Exceptions\ObjFetchError $e){
-          return $e;
-      }
-  }
+        try {
+            return $container->DataObject($file)->delete();
+        } catch(\OpenCloud\Common\Exceptions\ObjFetchError $e) {
+            return $e;
+        }
+    }
 }
 
