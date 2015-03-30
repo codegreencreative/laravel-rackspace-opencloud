@@ -124,7 +124,7 @@ class OpenCloud extends \OpenCloud\Rackspace {
         $file = explode('/',$file);
         $file = end($file);
         try {
-            return $container->DataObject($file)->purge();
+            return $container->DataObject($file)->delete();
         } catch(\OpenCloud\Common\Exceptions\ObjFetchError $e) {
             return $e;
         }
