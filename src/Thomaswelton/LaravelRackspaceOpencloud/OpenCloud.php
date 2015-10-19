@@ -21,6 +21,8 @@ class OpenCloud extends \OpenCloud\Rackspace {
             'username' => Config::get('laravel-rackspace-opencloud::username'),
             'apiKey' => Config::get('laravel-rackspace-opencloud::apiKey')
         ));
+        // Always check if new token is needed
+        $this->authenticate();
     }
 
     public function objectStore(){
